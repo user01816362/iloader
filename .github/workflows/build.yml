@@ -9,11 +9,26 @@ on:
       - "*"
   workflow_dispatch:
     inputs:
-      platforms:
-        description: "Platforms to build (comma-separated: macos,linux,linux-arm,windows)"
-        required: true
-        default: "macos"
-        type: string
+      macos:
+        description: "Build macOS"
+        required: false
+        default: true
+        type: boolean
+      linux:
+        description: "Build Linux (x64)"
+        required: false
+        default: false
+        type: boolean
+      linux_arm:
+        description: "Build Linux (ARM)"
+        required: false
+        default: false
+        type: boolean
+      windows:
+        description: "Build Windows"
+        required: false
+        default: false
+        type: boolean
       create_release:
         description: "Create a GitHub release with built artifacts"
         required: false
@@ -68,15 +83,13 @@ jobs:
       - name: Skip if platform not selected (manual trigger only)
         if: github.event_name == 'workflow_dispatch'
         run: |
-          IFS=',' read -ra PLATFORMS <<< "${{ inputs.platforms }}"
-          for p in "${PLATFORMS[@]}"; do
-            p=$(echo "$p" | xargs)  # trim whitespace
-            if [ "$p" = "${{ matrix.label }}" ]; then
-              echo "selected=true" >> $GITHUB_ENV
-              exit 0
-            fi
-          done
-          echo "selected=false" >> $GITHUB_ENV
+          case "${{ matrix.label }}" in
+            macos)     [ "${{ inputs.macos }}" = "true" ] && echo "selected=true" >> $GITHUB_ENV || echo "selected=false" >> $GITHUB_ENV ;;
+            linux)     [ "${{ inputs.linux }}" = "true" ] && echo "selected=true" >> $GITHUB_ENV || echo "selected=false" >> $GITHUB_ENV ;;
+            linux-arm) [ "${{ inputs.linux_arm }}" = "true" ] && echo "selected=true" >> $GITHUB_ENV || echo "selected=false" >> $GITHUB_ENV ;;
+            windows)   [ "${{ inputs.windows }}" = "true" ] && echo "selected=true" >> $GITHUB_ENV || echo "selected=false" >> $GITHUB_ENV ;;
+            *)         echo "selected=false" >> $GITHUB_ENV ;;
+          esac
 
       - name: Skip check
         if: github.event_name == 'workflow_dispatch' && env.selected == 'false'
