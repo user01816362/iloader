@@ -161,13 +161,20 @@ jobs:
           echo "APPLE_SIGNING_IDENTITY=${{ secrets.DEV_IDENTITY_NAME }}" >> $GITHUB_ENV
           echo "APPLE_TEAM_ID=${{ secrets.NOTARIZE_TEAM_ID }}" >> $GITHUB_ENV
 
+      - name: Export signing secrets
+        if: (github.event_name != 'workflow_dispatch' || env.selected == 'true') && (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.create_release))
+        shell: bash
+        run: |
+          if [ -n "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" ]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY=${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" >> $GITHUB_ENV
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" >> $GITHUB_ENV
+          fi
+
       - name: Build
         if: github.event_name != 'workflow_dispatch' || env.selected == 'true'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           args: ${{ matrix.args }} ${{ (github.event_name != 'release' && !(github.event_name == 'workflow_dispatch' && inputs.create_release)) && ' --config src-tauri/ci.conf.json' || '' }}
           includeUpdaterJson: false
