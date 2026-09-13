@@ -8,6 +8,22 @@ on:
     branches:
       - "*"
   workflow_dispatch:
+    inputs:
+      platforms:
+        description: "Platforms to build (comma-separated: macos,linux,linux-arm,windows)"
+        required: true
+        default: "macos"
+        type: string
+      create_release:
+        description: "Create a GitHub release with built artifacts"
+        required: false
+        default: false
+        type: boolean
+      tag:
+        description: "Release tag (e.g. v2.3.4) — only used if create_release is true"
+        required: false
+        default: ""
+        type: string
   release:
     types: [published]
 
@@ -24,26 +40,53 @@ jobs:
         include:
           - platform: "ubuntu-22.04"
             args: "--bundles deb"
+            label: "linux"
           - platform: "ubuntu-22.04"
             args: "--bundles rpm"
+            label: "linux"
           - platform: "ubuntu-22.04"
             args: "--bundles appimage"
+            label: "linux"
           - platform: "ubuntu-22.04-arm"
             args: "--bundles appimage"
+            label: "linux-arm"
           - platform: "ubuntu-22.04-arm"
             args: "--bundles deb"
+            label: "linux-arm"
           - platform: "ubuntu-22.04-arm"
             args: "--bundles rpm"
+            label: "linux-arm"
           - platform: "windows-latest"
             args: ""
+            label: "windows"
           - platform: "macos-latest"
             args: "--target universal-apple-darwin"
+            label: "macos"
 
     runs-on: ${{ matrix.platform }}
     steps:
+      - name: Skip if platform not selected (manual trigger only)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          IFS=',' read -ra PLATFORMS <<< "${{ inputs.platforms }}"
+          for p in "${PLATFORMS[@]}"; do
+            p=$(echo "$p" | xargs)  # trim whitespace
+            if [ "$p" = "${{ matrix.label }}" ]; then
+              echo "selected=true" >> $GITHUB_ENV
+              exit 0
+            fi
+          done
+          echo "selected=false" >> $GITHUB_ENV
+
+      - name: Skip check
+        if: github.event_name == 'workflow_dispatch' && env.selected == 'false'
+        run: echo "Skipping ${{ matrix.label }} — not in selected platforms"
+
       - uses: actions/checkout@v6
+        if: github.event_name != 'workflow_dispatch' || env.selected == 'true'
 
       - name: Cache Rust and bun dependencies
+        if: github.event_name != 'workflow_dispatch' || env.selected == 'true'
         uses: actions/cache@v5
         with:
           path: |
@@ -56,45 +99,48 @@ jobs:
             ${{ runner.os }}-iloader-
 
       - name: Install Rust stable
+        if: github.event_name != 'workflow_dispatch' || env.selected == 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04' || matrix.platform == 'ubuntu-22.04-arm'
+        if: (github.event_name != 'workflow_dispatch' || env.selected == 'true') && (matrix.platform == 'ubuntu-22.04' || matrix.platform == 'ubuntu-22.04-arm')
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf perl make${{ matrix.args == '--bundles appimage' && ' xdg-utils' || '' }}
 
       - name: Add MSVC to PATH
-        if: matrix.platform == 'windows-latest'
+        if: (github.event_name != 'workflow_dispatch' || env.selected == 'true') && matrix.platform == 'windows-latest'
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Install Perl and Make for Windows
-        if: matrix.platform == 'windows-latest'
+        if: (github.event_name != 'workflow_dispatch' || env.selected == 'true') && matrix.platform == 'windows-latest'
         run: |
           choco install strawberryperl make --no-progress
 
       - uses: oven-sh/setup-bun@v2
+        if: github.event_name != 'workflow_dispatch' || env.selected == 'true'
         with:
           bun-version: latest
 
       - name: Install frontend dependencies
+        if: github.event_name != 'workflow_dispatch' || env.selected == 'true'
         run: bun i --frozen-lockfile
 
       - name: Clean old bundles
-        if: matrix.platform != 'macos-latest'
+        if: (github.event_name != 'workflow_dispatch' || env.selected == 'true') && matrix.platform != 'macos-latest'
         run: bunx rimraf src-tauri/target/release/bundle
 
       - name: Clean old bundles
-        if: matrix.platform == 'macos-latest'
+        if: (github.event_name != 'workflow_dispatch' || env.selected == 'true') && matrix.platform == 'macos-latest'
         run: |
           bunx rimraf src-tauri/target/aarch64-apple-darwin/release/bundle
           bunx rimraf src-tauri/target/x86_64-apple-darwin/release/bundle
           bunx rimraf src-tauri/target/universal-apple-darwin/release/bundle
 
       - name: Export Apple signing secrets (release only)
-        if: matrix.platform == 'macos-latest' && env.HAVE_SIGNING_SECRETS == 'true' && github.event_name == 'release'
+        if: (github.event_name != 'workflow_dispatch' || env.selected == 'true') && matrix.platform == 'macos-latest' && env.HAVE_SIGNING_SECRETS == 'true' && (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.create_release))
         run: |
           echo "APPLE_CERTIFICATE=${{ secrets.DEV_ID_P12_BASE64 }}" >> $GITHUB_ENV
           echo "APPLE_CERTIFICATE_PASSWORD=${{ secrets.DEV_ID_P12_PASSWORD }}" >> $GITHUB_ENV
@@ -102,19 +148,22 @@ jobs:
           echo "APPLE_TEAM_ID=${{ secrets.NOTARIZE_TEAM_ID }}" >> $GITHUB_ENV
 
       - name: Build
+        if: github.event_name != 'workflow_dispatch' || env.selected == 'true'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          args: ${{ matrix.args }} ${{ github.event_name != 'release' && ' --config src-tauri/ci.conf.json' || '' }}
-          includeUpdaterJson: ${{ github.event_name == 'release' }}
+          args: ${{ matrix.args }} ${{ (github.event_name != 'release' && !(github.event_name == 'workflow_dispatch' && inputs.create_release)) && ' --config src-tauri/ci.conf.json' || '' }}
+          includeUpdaterJson: ${{ github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.create_release) }}
           releaseId: ${{ github.event_name == 'release' && github.event.release.id || '' }}
+          tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || '' }}
+          releaseName: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || '' }}
           assetNamePattern: "[name]-[platform]-[arch][ext]"
 
       - name: Notarize & Staple DMG (release only)
-        if: matrix.platform == 'macos-latest' && env.HAVE_NOTARIZE_SECRETS == 'true' && github.event_name == 'release'
+        if: (github.event_name != 'workflow_dispatch' || env.selected == 'true') && matrix.platform == 'macos-latest' && env.HAVE_NOTARIZE_SECRETS == 'true' && (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.create_release))
         run: |
           DMG_PATH=$(find src-tauri/target -name "*.dmg" -print -quit)
           if [ -z "$DMG_PATH" ]; then
@@ -131,56 +180,56 @@ jobs:
 
       - name: Upload macOS DMG
         uses: actions/upload-artifact@v7
-        if: matrix.platform == 'macos-latest'
+        if: (github.event_name != 'workflow_dispatch' || env.selected == 'true') && matrix.platform == 'macos-latest'
         with:
           name: macos-dmg-universal
           path: ${{ github.workspace }}/src-tauri/target/**/release/bundle/**/*.dmg
 
       - name: Upload Linux DEB
         uses: actions/upload-artifact@v7
-        if: matrix.platform == 'ubuntu-22.04' && matrix.args == '--bundles deb'
+        if: (github.event_name != 'workflow_dispatch' || env.selected == 'true') && matrix.platform == 'ubuntu-22.04' && matrix.args == '--bundles deb'
         with:
           name: linux-deb
           path: ${{ github.workspace }}/src-tauri/target/release/bundle/**/*.deb
 
       - name: Upload Linux RPM
         uses: actions/upload-artifact@v7
-        if: matrix.platform == 'ubuntu-22.04' && matrix.args == '--bundles rpm'
+        if: (github.event_name != 'workflow_dispatch' || env.selected == 'true') && matrix.platform == 'ubuntu-22.04' && matrix.args == '--bundles rpm'
         with:
           name: linux-rpm
           path: ${{ github.workspace }}/src-tauri/target/release/bundle/**/*.rpm
 
       - name: Upload Linux AppImage
         uses: actions/upload-artifact@v7
-        if: matrix.platform == 'ubuntu-22.04' && matrix.args == '--bundles appimage'
+        if: (github.event_name != 'workflow_dispatch' || env.selected == 'true') && matrix.platform == 'ubuntu-22.04' && matrix.args == '--bundles appimage'
         with:
           name: linux-appimage
           path: ${{ github.workspace }}/src-tauri/target/release/bundle/**/*.AppImage
 
       - name: Upload Linux DEB (ARM)
         uses: actions/upload-artifact@v7
-        if: matrix.platform == 'ubuntu-22.04-arm' && matrix.args == '--bundles deb'
+        if: (github.event_name != 'workflow_dispatch' || env.selected == 'true') && matrix.platform == 'ubuntu-22.04-arm' && matrix.args == '--bundles deb'
         with:
           name: linux-deb-arm
           path: ${{ github.workspace }}/src-tauri/target/release/bundle/**/*.deb
 
       - name: Upload Linux RPM (ARM)
         uses: actions/upload-artifact@v7
-        if: matrix.platform == 'ubuntu-22.04-arm' && matrix.args == '--bundles rpm'
+        if: (github.event_name != 'workflow_dispatch' || env.selected == 'true') && matrix.platform == 'ubuntu-22.04-arm' && matrix.args == '--bundles rpm'
         with:
           name: linux-rpm-arm
           path: ${{ github.workspace }}/src-tauri/target/release/bundle/**/*.rpm
 
       - name: Upload Linux AppImage (ARM)
         uses: actions/upload-artifact@v7
-        if: matrix.platform == 'ubuntu-22.04-arm' && matrix.args == '--bundles appimage'
+        if: (github.event_name != 'workflow_dispatch' || env.selected == 'true') && matrix.platform == 'ubuntu-22.04-arm' && matrix.args == '--bundles appimage'
         with:
           name: linux-appimage-arm
           path: ${{ github.workspace }}/src-tauri/target/release/bundle/**/*.AppImage
 
       - name: Upload Windows EXE
         uses: actions/upload-artifact@v7
-        if: matrix.platform == 'windows-latest'
+        if: (github.event_name != 'workflow_dispatch' || env.selected == 'true') && matrix.platform == 'windows-latest'
         with:
           name: windows-exe
           path: |
