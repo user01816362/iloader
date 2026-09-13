@@ -170,7 +170,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           args: ${{ matrix.args }} ${{ (github.event_name != 'release' && !(github.event_name == 'workflow_dispatch' && inputs.create_release)) && ' --config src-tauri/ci.conf.json' || '' }}
-          includeUpdaterJson: ${{ github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.create_release) }}
+          includeUpdaterJson: false
           releaseId: ${{ github.event_name == 'release' && github.event.release.id || '' }}
           tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || '' }}
           releaseName: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || '' }}
@@ -248,6 +248,29 @@ jobs:
           name: windows-exe
           path: |
             ${{ github.workspace }}/src-tauri/target/release/bundle/**/*.exe
+
+  release:
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.create_release && inputs.tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create release and upload assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ inputs.tag }}" \
+            --title "iloader ${{ inputs.tag }}" \
+            --generate-notes \
+            --repo "${{ github.repository }}" \
+            artifacts/*
 
   mark-latest:
     needs: build
