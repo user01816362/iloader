@@ -82,6 +82,7 @@ jobs:
     steps:
       - name: Skip if platform not selected (manual trigger only)
         if: github.event_name == 'workflow_dispatch'
+        shell: bash
         run: |
           case "${{ matrix.label }}" in
             macos)     [ "${{ inputs.macos }}" = "true" ] && echo "selected=true" >> $GITHUB_ENV || echo "selected=false" >> $GITHUB_ENV ;;
